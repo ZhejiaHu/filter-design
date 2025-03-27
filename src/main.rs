@@ -96,10 +96,15 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 fn sqrt_approximation<T>(num: T, err_: Option<T>) -> T
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
-    let err: T = err_.unwrap_or(T::from_f32(1e-6));
+    let err: T = err_.unwrap_or(T::from_f32(1e-3));
     let mut sol: T = num / (T::one() + T::one());
-    while (sol * sol + - num).abs() > err {
+    let mut prv_sol: Option<T> = None;
+    while (sol * sol + - num).abs() > err  {
+        if prv_sol.is_some() && prv_sol.unwrap() == sol {
+            break;
+        }
         sol = T::from_f32(0.5)  * (sol + num / sol);
+        prv_sol = Some(sol);
     }
     sol
 }
@@ -173,9 +178,24 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 struct Data<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero
 {
-    raw_roll: T, raw_pitch: T, raw_yar: T,
-    raw_x: T, raw_y: T, raw_z: T,
-    dmp_roll: T, dmp_pitch: T, dmp_yaw: T
+    #[serde(rename = "Raw Roll")]
+    raw_roll: T,
+    #[serde(rename = "Raw Pitch")]
+    raw_pitch: T, 
+    #[serde(rename = "Raw Yar")]
+    raw_yar: T,
+    #[serde(rename = "Raw X")]
+    raw_x: T, 
+    #[serde(rename = "Raw Y")]
+    raw_y: T, 
+    #[serde(rename = "Raw Z")]
+    raw_z: T,
+    #[serde(rename = "DMP Roll")]
+    dmp_roll: T, 
+    #[serde(rename = "DMP Pitch")]
+    dmp_pitch: T, 
+    #[serde(rename = "DMP Yaw")]
+    dmp_yaw: T
 }
 
 
@@ -245,5 +265,9 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn main() {
-
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/pitch.txt"), Path::new("output/pitch.csv"));
+    let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
+    let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
+    let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
+    testbench_data(dataset_pth, output_pth, row_kf_config, pitch_kf_config, yaw_kf_config);
 }
