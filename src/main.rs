@@ -181,19 +181,19 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     #[serde(rename = "Raw Roll")]
     raw_roll: T,
     #[serde(rename = "Raw Pitch")]
-    raw_pitch: T, 
+    raw_pitch: T,
     #[serde(rename = "Raw Yar")]
     raw_yar: T,
     #[serde(rename = "Raw X")]
-    raw_x: T, 
+    raw_x: T,
     #[serde(rename = "Raw Y")]
-    raw_y: T, 
+    raw_y: T,
     #[serde(rename = "Raw Z")]
     raw_z: T,
     #[serde(rename = "DMP Roll")]
-    dmp_roll: T, 
+    dmp_roll: T,
     #[serde(rename = "DMP Pitch")]
-    dmp_pitch: T, 
+    dmp_pitch: T,
     #[serde(rename = "DMP Yaw")]
     dmp_yaw: T
 }
@@ -249,6 +249,7 @@ fn testbench_data<T>(dataset: &Path, output_path: &Path, row_kf_config: Option<(
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
     let dataset: Vec<Data<T>> = process_data(dataset).unwrap();
     let mut writer = Writer::from_path(output_path).unwrap();
+    writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
     for data in dataset {
         let (filtered_roll, filtered_pitch, filtered_raw): (T, T, T) = system_without_butterworth(
             data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z,
@@ -258,7 +259,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
             filtered_roll.to_f32().to_string(),
             filtered_pitch.to_f32().to_string(),
             filtered_roll.to_f32().to_string()]
-        ).unwrap();
+        ).expect("No error writing line");
     }
 }
 
