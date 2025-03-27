@@ -200,7 +200,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 #[derive(Clone)]
-pub(crate) struct Offsets<T>
+pub(crate) struct OffsetsTyped<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
     pub yaw: T,
     pub pitch: T,
@@ -220,10 +220,10 @@ macro_rules! arcsin_highest_approximation {
     ($num: expr) => { arcsin_approximation(($num), Some(20)) };
 }
 
-impl<T> Offsets<T>
+impl<T> OffsetsTyped<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
     pub(crate) fn new() -> Self {
-        Offsets { yaw: T::zero(), pitch: T::zero(), roll: T::zero(), }
+        OffsetsTyped { yaw: T::zero(), pitch: T::zero(), roll: T::zero(), }
     }
 
     pub(crate) fn from_quaternion(&mut self, w: T, x: T, y: T, z: T) {
@@ -240,8 +240,6 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         self.roll = roll;
     }
 }
-
-
 #[derive(Copy, Clone)]
 pub(crate) struct ButterworthFilter<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
