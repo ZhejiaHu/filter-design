@@ -1,13 +1,16 @@
-use std::option::Option;
+use core::option::Option;
 use core::{
     ops::{ Add, AddAssign, Mul, MulAssign, Div, DivAssign, Neg  },
     cmp::{ PartialEq, PartialOrd }
 };
 use std::{ error::Error, path::Path};
+use std::alloc::System;
 use std::fs::File;
-use fixed::types::I18F14;
+use fixed::types::{I16F16, I18F14};
 use csv::{Reader, Writer};
 use serde::{Deserialize, Serialize};
+
+type Fixed = I16F16;
 
 pub trait OneZero {
     fn one() -> Self;
@@ -32,16 +35,16 @@ impl OneZero for f32 {
     fn from_f32(num_f: f32) -> Self { num_f }
 }
 
-impl OneZero for I18F14 {
-    fn one() -> Self { I18F14::from_num(1.0) }
+impl OneZero for Fixed {
+    fn one() -> Self { Fixed::from_num(1.0) }
 
-    fn zero() -> Self { I18F14::from_num(0.0) }
+    fn zero() -> Self { Fixed::from_num(0.0) }
     fn abs(self) -> Self { self.abs() }
 
     fn to_f32(self) -> f32 { self.to_num() }
 
-    fn from_usize(num_u: usize) -> Self { I18F14::from_num(num_u) }
-    fn from_f32(num_f: f32) -> Self { I18F14::from_num(num_f) }
+    fn from_usize(num_u: usize) -> Self { Fixed::from_num(num_u) }
+    fn from_f32(num_f: f32) -> Self { Fixed::from_num(num_f) }
 
 }
 
@@ -68,14 +71,13 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     cache[exp]
 }
 
-
 pub fn arctan_approximation<T>(num: T, degree_: Option<usize>, small_angle: bool) -> T
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
     if small_angle || num == T::zero() {
         return num;
     }
     const MAX_DEGREE: usize = 20;
-    let degree = degree_.unwrap_or(2);
+    let degree = degree_.unwrap_or(MAX_DEGREE);
     assert!(degree <= MAX_DEGREE);
     let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
     for idx in (0..=degree).rev() {
@@ -89,6 +91,30 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         arctan += co_eff * eval[idx] / T::from_usize(idx);
     }
     arctan
+}
+
+
+pub fn arcsin_approximation<T>(num: T, degree_: Option<usize>) -> T
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    const MAX_DEGREE: usize = 20;
+    let degree = degree_.unwrap_or(MAX_DEGREE);
+    assert!(degree <= MAX_DEGREE && degree % 2 == 1);
+    let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
+    for idx in (0..=degree).rev() {
+        if idx % 2 == 1 {
+            fast_power(num, idx, &mut eval);
+        }
+    }
+    const FACT_LEN: usize = (MAX_DEGREE >> 1) + 1;
+    let mut factorials: [[usize; 2]; FACT_LEN] = [[1; 2]; FACT_LEN];
+    let mut sol: T = num;
+    for idx in 1..FACT_LEN.min(degree >> 1) {
+        let cur_power: usize = (idx << 1) + 1;
+        factorials[idx][0] = factorials[idx - 1][0] * ((idx << 1) - 1);
+        factorials[idx][1] = factorials[idx - 1][1] * (idx << 1);
+        sol += (T::from_usize(factorials[idx][0]) * eval[cur_power]) / (T::from_usize(factorials[idx][1]) * T::from_usize(cur_power))
+    }
+    sol
 }
 
 
@@ -173,6 +199,126 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct Offsets<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    pub yaw: T,
+    pub pitch: T,
+    pub roll: T,
+}
+
+macro_rules! arctan_highest_approximation {
+    ($num: expr) => { arctan_approximation(($num), Some(20), false) };
+}
+
+
+macro_rules! arctan2 {
+    ($numer: expr, $denom: expr) => { arctan_highest_approximation!(($numer) / ($denom)) };
+}
+
+macro_rules! arcsin_highest_approximation {
+    ($num: expr) => { arcsin_approximation(($num), Some(20)) };
+}
+
+impl<T> Offsets<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    pub(crate) fn new() -> Self {
+        Offsets { yaw: T::zero(), pitch: T::zero(), roll: T::zero(), }
+    }
+
+    pub(crate) fn from_quaternion(&mut self, w: T, x: T, y: T, z: T) {
+        let two = T::one() + T::one();
+        let one = T::one();
+        let gx = two * (x * z + (- w * y));
+        let gy = two * (w * x + y * z);
+        let gz = w * w + (- x * x) + (- y * y) + z * z;
+        let yaw = arctan2!((two * x * y + (- two * w * z)), two * w * w + two * x * x + (- one));
+        let pitch = arcsin_highest_approximation!(two * (w * y + (- z * x)));
+        let roll = arctan2!(two * (w * x + y * z), one + (- two * (x * x + y * y)));
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.roll = roll;
+    }
+}
+
+
+#[derive(Copy, Clone)]
+pub(crate) struct ButterworthFilter<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    num_sample: u8,
+    pub prv_x: T,
+    pub prv_y: T,
+    co_eff1: T,
+    co_eff2: T
+}
+
+
+
+impl<T> ButterworthFilter<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    // let co_eff1 = fix!(self.num_sample - 1) / fix!(self.num_sample);
+    // let co_eff2 = fix!(1) / (fix!(self.num_sample) * 2);
+    pub(crate) fn new(num_sample: u8) -> Self {
+        let (co_eff1, co_eff2): (T, T) = (T::from_usize((num_sample - 1) as usize) / T::from_usize(num_sample as usize), T::one() / T::from_usize((num_sample as usize) << 1));
+        ButterworthFilter { num_sample, prv_x: T::zero(), prv_y: T::zero(), co_eff1, co_eff2}
+    }
+
+    pub(crate) fn filter(&mut self, cur_x: T) -> T {
+        let cur_y = self.co_eff1 * self.prv_y + self.co_eff2 * (cur_x + self.prv_x);
+        self.prv_x = cur_x;
+        self.prv_y = cur_y;
+        cur_y
+    }
+}
+
+
+struct FilterSystem<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    bwf_theta: ButterworthFilter<T>, kf_theta: KalmanFilter<T>,
+    bwf_phi: ButterworthFilter<T>, kf_phi: KalmanFilter<T>,
+    bwf_psi: ButterworthFilter<T>, kf_psi: KalmanFilter<T>,
+    bwf_x_dd: ButterworthFilter<T>,
+    bwf_y_dd: ButterworthFilter<T>,
+    bwf_z_dd: ButterworthFilter<T>
+}
+
+
+
+impl<T> FilterSystem<T>
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+    const DEGREE: usize = 20;
+    const SMALL_ANGLE: bool = false;
+    pub fn new(bwf_config_: Option<[u8; 6]>, theta_kf_config_: Option<(T, T, T)>, phi_kf_config_: Option<(T, T, T)>, psi_kf_config_: Option<(T, T, T)>) -> Self {
+        let bwf_config: [u8; 6] = bwf_config_.unwrap_or([4; 6]);
+        let (theta_kf_config, phi_kf_config, psi_kf_config): ((T, T, T), (T, T, T), (T, T, T)) = (
+            theta_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero())), phi_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero())), psi_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero()))
+        );
+        FilterSystem {
+            bwf_theta: ButterworthFilter::new(bwf_config[0]), kf_theta: KalmanFilter::new(theta_kf_config.0, theta_kf_config.1, theta_kf_config.2),
+            bwf_phi: ButterworthFilter::new(bwf_config[1]), kf_phi: KalmanFilter::new(phi_kf_config.0, phi_kf_config.1, phi_kf_config.2),
+            bwf_psi: ButterworthFilter::new(bwf_config[2]), kf_psi: KalmanFilter::new(psi_kf_config.0, psi_kf_config.1, psi_kf_config.2),
+            bwf_x_dd: ButterworthFilter::new(bwf_config[3]),
+            bwf_y_dd: ButterworthFilter::new(bwf_config[4]),
+            bwf_z_dd: ButterworthFilter::new(bwf_config[5])
+        }
+    }
+
+    pub fn filter(&mut self, theta: T, phi: T, psi: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T) {
+        let (theta_tilde, phi_tilde , psi_tilde, x_dd_tilde, y_dd_tilde, z_dd_tilde): (T, T, T, T, T, T) = (
+            self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(phi),
+            self.bwf_x_dd.filter(x_dd), self.bwf_y_dd.filter(y_dd), self.bwf_z_dd.filter(z_dd)
+        );
+        let (theta_hat, phi_hat): (T, T) = row_pitch(x_dd_tilde, y_dd_tilde, z_dd_tilde, Some(Self::DEGREE), Some(Self::SMALL_ANGLE));
+        // todo: check wire connection of Kalman Filter and output
+        (
+            self.kf_theta.predict(theta_tilde, theta_hat).1,
+            self.kf_phi.predict(phi_tilde, phi_hat).1,
+            psi_tilde
+        )
+    }
+
+}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Data<T>
@@ -211,27 +357,6 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 
-fn system_without_butterworth<T>(
-    theta_slash: T, phi_slash: T, psi_slash: T, x_dd_slash: T, y_dd_slash: T, z_dd_slash: T, degree: Option<usize>, small_angle: Option<bool>,
-    theta_kf_config_: Option<(T, T, T)>, phi_kf_config_: Option<(T, T, T)>, psi_kf_config_: Option<(T, T, T)>) -> (T, T, T)
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
-    let (theta_kf_config, phi_kf_config, psi_kf_config): ((T, T, T), (T, T, T), (T, T, T)) = (
-        theta_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero())), phi_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero())), psi_kf_config_.unwrap_or((T::zero(), T::zero(), T::zero()))
-    );
-    let (theta_tilde, phi_tilde): (T, T) = row_pitch(x_dd_slash, y_dd_slash, z_dd_slash, degree, small_angle);
-    let (mut kalman_theta, mut kalman_phi, mut kalman_psi): (KalmanFilter<T>, KalmanFilter<T>, KalmanFilter<T>) = (
-        KalmanFilter::new(theta_kf_config.0, theta_kf_config.1, theta_kf_config.2),
-        KalmanFilter::new(phi_kf_config.0, phi_kf_config.1, phi_kf_config.2),
-        KalmanFilter::new(psi_kf_config.0, psi_kf_config.1, psi_kf_config.2)
-    );
-    (
-        kalman_theta.predict(theta_slash, theta_tilde).0,
-        kalman_phi.predict(phi_slash, phi_tilde).0,
-        psi_slash
-    )
-}
-
-
 fn process_data<T>(dataset: &Path) -> Result<Vec<Data<T>>, Box<dyn Error>>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
     let mut reader = csv::Reader::from_path(dataset)?;
@@ -250,15 +375,15 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     let dataset: Vec<Data<T>> = process_data(dataset).unwrap();
     let mut writer = Writer::from_path(output_path).unwrap();
     writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
+    let mut filter_system: FilterSystem<T> = FilterSystem::new(Some([5u8; 6]), row_kf_config, pitch_kf_config, yaw_kf_config);
     for data in dataset {
-        let (filtered_roll, filtered_pitch, filtered_raw): (T, T, T) = system_without_butterworth(
-            data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z,
-            Some(10), Some(false), row_kf_config, pitch_kf_config, yaw_kf_config
+        let (filtered_roll, filtered_pitch, filtered_yaw): (T, T, T) = filter_system.filter(
+            data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z
         );
         writer.write_record(&[
             filtered_roll.to_f32().to_string(),
             filtered_pitch.to_f32().to_string(),
-            filtered_roll.to_f32().to_string()]
+            filtered_yaw.to_f32().to_string()]
         ).expect("No error writing line");
     }
 }
@@ -266,7 +391,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn main() {
-    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/pitch.txt"), Path::new("output/pitch.csv"));
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/roll.txt"), Path::new("output/roll.csv"));
     let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
     let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
     let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
