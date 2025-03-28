@@ -5,6 +5,7 @@ use core::{
 };
 use std::{ error::Error, path::Path};
 use std::alloc::System;
+use std::fmt::Display;
 use std::fs::File;
 use fixed::types::{I16F16, I18F14};
 use csv::{Reader, Writer};
@@ -26,7 +27,7 @@ pub trait OneZero {
 impl OneZero for f32 {
     fn one() -> Self { 1.0 }
     fn zero() -> Self { 0.0 }
-    fn abs(self) -> Self { self.abs() }
+    fn abs(self) -> Self { if self < 0.0 { -self } else { self } }
 
     fn to_f32(self) -> f32 { self }
 
@@ -39,18 +40,17 @@ impl OneZero for Fixed {
     fn one() -> Self { Fixed::from_num(1.0) }
 
     fn zero() -> Self { Fixed::from_num(0.0) }
-    fn abs(self) -> Self { self.abs() }
+    fn abs(self) -> Self { if self < Fixed::from_num(0) { -self } else { self } }
 
     fn to_f32(self) -> f32 { self.to_num() }
 
     fn from_usize(num_u: usize) -> Self { Fixed::from_num(num_u) }
     fn from_f32(num_f: f32) -> Self { Fixed::from_num(num_f) }
-
 }
 
 
 fn fast_power<T>(base: T, exp: usize, cache: &mut [T]) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero{
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     assert!(exp < cache.len());
     if exp == 0 {
         cache[exp] = T::one();
@@ -72,11 +72,18 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 pub fn arctan_approximation<T>(num: T, degree_: Option<usize>, small_angle: bool) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     if small_angle || num == T::zero() {
         return num;
     }
-    const MAX_DEGREE: usize = 20;
+    if num.abs() > T::one() {
+        return if num > T::one() {
+            T::from_f32(core::f32::consts::PI / 2.0) + - arctan_approximation(T::one() / num, degree_, small_angle)
+        } else {
+            -T::from_f32(core::f32::consts::PI / 2.0) + - arctan_approximation(T::one() / num, degree_, small_angle)
+        }
+    }
+    const MAX_DEGREE: usize = 10;
     let degree = degree_.unwrap_or(MAX_DEGREE);
     assert!(degree <= MAX_DEGREE);
     let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
@@ -95,8 +102,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 pub fn arcsin_approximation<T>(num: T, degree_: Option<usize>) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
-    const MAX_DEGREE: usize = 20;
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+    const MAX_DEGREE: usize = 10;
     let degree = degree_.unwrap_or(MAX_DEGREE);
     assert!(degree <= MAX_DEGREE && degree % 2 == 1);
     let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
@@ -108,7 +115,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     const FACT_LEN: usize = (MAX_DEGREE >> 1) + 1;
     let mut factorials: [[usize; 2]; FACT_LEN] = [[1; 2]; FACT_LEN];
     let mut sol: T = num;
-    for idx in 1..FACT_LEN.min(degree >> 1) {
+    for idx in 1..=FACT_LEN.min(degree >> 1) {
         let cur_power: usize = (idx << 1) + 1;
         factorials[idx][0] = factorials[idx - 1][0] * ((idx << 1) - 1);
         factorials[idx][1] = factorials[idx - 1][1] * (idx << 1);
@@ -121,15 +128,17 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn sqrt_approximation<T>(num: T, err_: Option<T>) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+    assert!(num > T::zero());
     let err: T = err_.unwrap_or(T::from_f32(1e-3));
     let mut sol: T = num / (T::one() + T::one());
     let mut prv_sol: Option<T> = None;
     while (sol * sol + - num).abs() > err  {
-        if prv_sol.is_some() && prv_sol.unwrap() == sol {
+        //println!("sol: {}, num: {}, sol * sol + - num: {}", sol, num, sol * sol + - num);
+        sol = T::from_f32(0.5)  * (sol + num / sol);
+        if prv_sol.is_some() && (prv_sol.unwrap() + - sol).abs() < err {
             break;
         }
-        sol = T::from_f32(0.5)  * (sol + num / sol);
         prv_sol = Some(sol);
     }
     sol
@@ -141,23 +150,25 @@ macro_rules! pow2 {
 }
 
 pub fn row_pitch<T>(a_x: T, a_y: T, a_z: T, degree: Option<usize>, small_angle_: Option<bool>) -> (T, T)
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     let small_angle = small_angle_.unwrap_or(true);
     let (denom_roll, denom_pitch): (T, T) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
     let (num_roll, num_pitch): (T, T) = (a_y / sqrt_approximation(denom_roll, None), a_x / sqrt_approximation(denom_pitch, None));
+    println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
+    println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
     (arctan_approximation(num_roll, degree, small_angle), arctan_approximation(num_pitch, degree, small_angle))
 }
 
 
 
 pub struct ComplementaryFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     a0: T,
     theta: T
 }
 
 impl<T> ComplementaryFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     pub(crate) fn new(a0: T) -> Self {
         ComplementaryFilter { a0, theta: T::zero() }
     }
@@ -173,7 +184,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 pub struct KalmanFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     c1: T,
     c2: T,
     p2phi: T,
@@ -182,9 +193,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 
-
 impl<T> KalmanFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     pub(crate) fn new(c1: T, c2: T, p2phi: T) -> Self {
         KalmanFilter { c1, c2, p2phi, bias: T::zero(), phi: T::zero() }
     }
@@ -201,14 +211,14 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 #[derive(Clone)]
 pub(crate) struct OffsetsTyped<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     pub yaw: T,
     pub pitch: T,
     pub roll: T,
 }
 
 macro_rules! arctan_highest_approximation {
-    ($num: expr) => { arctan_approximation(($num), Some(20), false) };
+    ($num: expr) => { arctan_approximation(($num), Some(10), false) };
 }
 
 
@@ -217,11 +227,11 @@ macro_rules! arctan2 {
 }
 
 macro_rules! arcsin_highest_approximation {
-    ($num: expr) => { arcsin_approximation(($num), Some(20)) };
+    ($num: expr) => { arcsin_approximation(($num), Some(9)) };
 }
 
 impl<T> OffsetsTyped<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     pub(crate) fn new() -> Self {
         OffsetsTyped { yaw: T::zero(), pitch: T::zero(), roll: T::zero(), }
     }
@@ -242,7 +252,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 #[derive(Copy, Clone)]
 pub(crate) struct ButterworthFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     num_sample: u8,
     pub prv_x: T,
     pub prv_y: T,
@@ -253,7 +263,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 impl<T> ButterworthFilter<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     // let co_eff1 = fix!(self.num_sample - 1) / fix!(self.num_sample);
     // let co_eff2 = fix!(1) / (fix!(self.num_sample) * 2);
     pub(crate) fn new(num_sample: u8) -> Self {
@@ -271,7 +281,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 struct FilterSystem<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     bwf_theta: ButterworthFilter<T>, kf_theta: KalmanFilter<T>,
     bwf_phi: ButterworthFilter<T>, kf_phi: KalmanFilter<T>,
     bwf_psi: ButterworthFilter<T>, kf_psi: KalmanFilter<T>,
@@ -283,8 +293,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 impl<T> FilterSystem<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
-    const DEGREE: usize = 20;
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+    const DEGREE: usize = 9;
     const SMALL_ANGLE: bool = false;
     pub fn new(bwf_config_: Option<[u8; 6]>, theta_kf_config_: Option<(T, T, T)>, phi_kf_config_: Option<(T, T, T)>, psi_kf_config_: Option<(T, T, T)>) -> Self {
         let bwf_config: [u8; 6] = bwf_config_.unwrap_or([4; 6]);
@@ -303,10 +313,13 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
     pub fn filter(&mut self, theta: T, phi: T, psi: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T) {
         let (theta_tilde, phi_tilde , psi_tilde, x_dd_tilde, y_dd_tilde, z_dd_tilde): (T, T, T, T, T, T) = (
-            self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(phi),
+            self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(psi),
             self.bwf_x_dd.filter(x_dd), self.bwf_y_dd.filter(y_dd), self.bwf_z_dd.filter(z_dd)
         );
+        // println!("[FilterSystem::filter] theta_input: {}, theta_tilde: {} | phi_input: {}, phi_tilde: {} | psi_input: {}, psi_tilde: {}", theta, theta_tilde, phi, phi_tilde, psi, psi_tilde);
+         println!("[FilterSystem::filter] x_dd_input: {}, x_dd_tile: {} | y_dd_input: {}, y_dd_tilde: {} | z_dd_input: {}, z_dd_tilde: {}", x_dd, x_dd_tilde, y_dd, y_dd_tilde, z_dd, z_dd_tilde);
         let (theta_hat, phi_hat): (T, T) = row_pitch(x_dd_tilde, y_dd_tilde, z_dd_tilde, Some(Self::DEGREE), Some(Self::SMALL_ANGLE));
+        println!("[FilterSystem::filter] theta_input: {}, theta_tilde: {}, theta_hat: {} | phi_input: {}, phi_tilde: {}, phi_hat: {}", theta, theta_tilde, theta_hat, phi, phi_tilde, phi_hat);
         // todo: check wire connection of Kalman Filter and output
         (
             self.kf_theta.predict(theta_tilde, theta_hat).1,
@@ -320,7 +333,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Data<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display
 {
     #[serde(rename = "Raw Roll")]
     raw_roll: T,
@@ -344,7 +357,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 impl<T> Data<T>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     fn from(f_data: Data<f32>) -> Self {
         Data {
             raw_roll: T::from_f32(f_data.raw_roll), raw_pitch: T::from_f32(f_data.raw_pitch), raw_yar: T::from_f32(f_data.raw_yar),
@@ -356,7 +369,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn process_data<T>(dataset: &Path) -> Result<Vec<Data<T>>, Box<dyn Error>>
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     let mut reader = csv::Reader::from_path(dataset)?;
     let mut data_vec: Vec<Data<T>> = Vec::new();
     for result in reader.deserialize() {
@@ -369,7 +382,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn testbench_data<T>(dataset: &Path, output_path: &Path, row_kf_config: Option<(T, T, T)>, pitch_kf_config: Option<(T, T, T)>, yaw_kf_config: Option<(T, T, T)>)
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero {
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     let dataset: Vec<Data<T>> = process_data(dataset).unwrap();
     let mut writer = Writer::from_path(output_path).unwrap();
     writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
@@ -378,6 +391,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         let (filtered_roll, filtered_pitch, filtered_yaw): (T, T, T) = filter_system.filter(
             data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z
         );
+        println!("[testbench_data] raw_roll: {}, filtered_roll: {}, raw_pitch: {}, filtered_pitch: {}, raw_yaw: {}, filtered_yaw: {}", data.raw_roll, filtered_roll, data.raw_pitch, filtered_pitch, data.raw_yar, filtered_yaw);
         writer.write_record(&[
             filtered_roll.to_f32().to_string(),
             filtered_pitch.to_f32().to_string(),
@@ -390,8 +404,34 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 fn main() {
     let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/roll.txt"), Path::new("output/roll.csv"));
-    let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
-    let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
-    let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 0.0));
+    let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
+    let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
+    let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
     testbench_data(dataset_pth, output_pth, row_kf_config, pitch_kf_config, yaw_kf_config);
+}
+
+
+#[cfg(test)]
+mod test {
+    use rand::Rng;
+    use crate::{arcsin_approximation, arctan_approximation, sqrt_approximation};
+    const ITER: usize = 100;
+    const ERR: f32 = 2e-1;
+
+    macro_rules! assert_close {
+        ($ans: expr, $sol: expr) => { assert!(($ans - $sol).abs() < ERR) };
+    }
+
+#[test]
+    fn test_arcsin() {
+        let mut rng = rand::rng();
+        let num: f32 = rng.random_range(-1.0 + ERR..1.0);
+        assert_close!(num.abs().sqrt(), sqrt_approximation(num.abs(), None));
+        // for idx in 0..ITER {
+        //     let num: f32 = rng.random_range(-1.0 + ERR..1.0);
+        //     assert_close!(num.asin(), arcsin_highest_approximation!(num));
+        //     assert_close!(num.atan(), arctan_highest_approximation!(num));
+        //     println!("num: {}, sqrt_sol: {}, sqrt_ans: {}", num.abs(), num.abs().sqrt(), sqrt_approximation(num.abs(), None));
+        // }
+    }
 }
