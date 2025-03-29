@@ -415,7 +415,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn main() {
-    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/yaw.txt"), Path::new("output/yaw.csv"));
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/yaw.csv"), Path::new("output/yaw.csv"));
     let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
     let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
     let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
