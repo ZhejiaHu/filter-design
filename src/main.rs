@@ -154,6 +154,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     let small_angle = small_angle_.unwrap_or(true);
     let (denom_roll, denom_pitch): (T, T) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
     let (num_roll, num_pitch): (T, T) = (a_y / sqrt_approximation(denom_roll, None), a_x / sqrt_approximation(denom_pitch, None));
+    println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
     println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
     println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
     (arctan_approximation(num_roll, degree, small_angle), arctan_approximation(num_pitch, degree, small_angle))
@@ -291,6 +292,15 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 
+#[inline]
+fn normalize_raw_rpy<T>(raw_roll: T, raw_pitch: T, raw_yaw: T) -> (T, T, T)
+where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+    const CONVERSION: f32 = 0.0007;
+    let conversion: T = T::from_f32(CONVERSION);
+    (raw_roll * conversion, raw_pitch * conversion, raw_yaw * raw_yaw)
+}
+
+
 
 impl<T> FilterSystem<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
@@ -311,7 +321,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         }
     }
 
-    pub fn filter(&mut self, theta: T, phi: T, psi: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T) {
+    pub fn filter(&mut self, theta_: T, phi_: T, psi_: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T) {
+        let (theta, phi, psi): (T, T, T) = normalize_raw_rpy(theta_, phi_, psi_);
         let (theta_tilde, phi_tilde , psi_tilde, x_dd_tilde, y_dd_tilde, z_dd_tilde): (T, T, T, T, T, T) = (
             self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(psi),
             self.bwf_x_dd.filter(x_dd), self.bwf_y_dd.filter(y_dd), self.bwf_z_dd.filter(z_dd)
@@ -388,6 +399,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
     let mut filter_system: FilterSystem<T> = FilterSystem::new(Some([5u8; 6]), row_kf_config, pitch_kf_config, yaw_kf_config);
     for data in dataset {
+        println!("================================================================================================================");
         let (filtered_roll, filtered_pitch, filtered_yaw): (T, T, T) = filter_system.filter(
             data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z
         );
@@ -403,7 +415,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 fn main() {
-    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/roll.txt"), Path::new("output/roll.csv"));
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/yaw.txt"), Path::new("output/yaw.csv"));
     let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
     let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
     let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
