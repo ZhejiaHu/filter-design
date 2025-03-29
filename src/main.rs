@@ -154,9 +154,9 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     let small_angle = small_angle_.unwrap_or(true);
     let (denom_roll, denom_pitch): (T, T) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
     let (num_roll, num_pitch): (T, T) = (a_y / sqrt_approximation(denom_roll, None), a_x / sqrt_approximation(denom_pitch, None));
-    println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
-    println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
-    println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
+    //println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
+    //println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
+    //println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
     (arctan_approximation(num_roll, degree, small_angle), arctan_approximation(num_pitch, degree, small_angle))
 }
 
@@ -296,8 +296,9 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 fn normalize_raw_rpy<T>(raw_roll: T, raw_pitch: T, raw_yaw: T) -> (T, T, T)
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     const CONVERSION: f32 = 0.0007;
-    let conversion: T = T::from_f32(CONVERSION);
-    (raw_roll * conversion, raw_pitch * conversion, raw_yaw * raw_yaw)
+    const PI: f32 = core::f64::consts::PI as f32;
+    let (conversion, pi): (T, T) = (T::from_f32(CONVERSION), T::from_f32(PI));
+    (raw_roll * conversion, raw_pitch * conversion, raw_yaw * conversion)
 }
 
 
@@ -328,9 +329,11 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
             self.bwf_x_dd.filter(x_dd), self.bwf_y_dd.filter(y_dd), self.bwf_z_dd.filter(z_dd)
         );
         // println!("[FilterSystem::filter] theta_input: {}, theta_tilde: {} | phi_input: {}, phi_tilde: {} | psi_input: {}, psi_tilde: {}", theta, theta_tilde, phi, phi_tilde, psi, psi_tilde);
-         println!("[FilterSystem::filter] x_dd_input: {}, x_dd_tile: {} | y_dd_input: {}, y_dd_tilde: {} | z_dd_input: {}, z_dd_tilde: {}", x_dd, x_dd_tilde, y_dd, y_dd_tilde, z_dd, z_dd_tilde);
+        // println!("[FilterSystem::filter] x_dd_input: {}, x_dd_tile: {} | y_dd_input: {}, y_dd_tilde: {} | z_dd_input: {}, z_dd_tilde: {}", x_dd, x_dd_tilde, y_dd, y_dd_tilde, z_dd, z_dd_tilde);
         let (theta_hat, phi_hat): (T, T) = row_pitch(x_dd_tilde, y_dd_tilde, z_dd_tilde, Some(Self::DEGREE), Some(Self::SMALL_ANGLE));
-        println!("[FilterSystem::filter] theta_input: {}, theta_tilde: {}, theta_hat: {} | phi_input: {}, phi_tilde: {}, phi_hat: {}", theta, theta_tilde, theta_hat, phi, phi_tilde, phi_hat);
+        println!("[FilterSystem::filter] theta_raw: {}, theta_input: {}, theta_tilde: {}, theta_hat: {}", theta_, theta, theta_tilde, theta_hat);
+        println!("[FilterSystem::filter] phi_raw: {}, phi_input: {}, phi_tilde: {}, phi_hat: {}", phi_, phi, phi_tilde, phi_hat);
+        println!("[FilterSystem::filter] psi: {}, psi_norm: {}, psi_tilde: {}", psi_, psi, psi_tilde);
         // todo: check wire connection of Kalman Filter and output
         (
             self.kf_theta.predict(theta_tilde, theta_hat).1,
@@ -373,7 +376,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         Data {
             raw_roll: T::from_f32(f_data.raw_roll), raw_pitch: T::from_f32(f_data.raw_pitch), raw_yar: T::from_f32(f_data.raw_yar),
             raw_x: T::from_f32(f_data.raw_x), raw_y: T::from_f32(f_data.raw_y), raw_z: T::from_f32(f_data.raw_z),
-            dmp_roll: T::from_f32(f_data.dmp_roll), dmp_pitch: T::from_f32(f_data.dmp_pitch), dmp_yaw: T::from_f32(f_data.dmp_yaw) }
+            dmp_roll: T::from_f32(f_data.dmp_roll), dmp_pitch: T::from_f32(f_data.dmp_pitch), dmp_yaw: T::from_f32(f_data.dmp_yaw)
+        }
     }
 }
 
@@ -397,13 +401,14 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     let dataset: Vec<Data<T>> = process_data(dataset).unwrap();
     let mut writer = Writer::from_path(output_path).unwrap();
     writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
-    let mut filter_system: FilterSystem<T> = FilterSystem::new(Some([5u8; 6]), row_kf_config, pitch_kf_config, yaw_kf_config);
+    let mut filter_system: FilterSystem<T> = FilterSystem::new(Some([10u8; 6]), row_kf_config, pitch_kf_config, yaw_kf_config);
     for data in dataset {
         println!("================================================================================================================");
         let (filtered_roll, filtered_pitch, filtered_yaw): (T, T, T) = filter_system.filter(
-            data.raw_roll, data.dmp_pitch, data.dmp_yaw, data.raw_x, data.raw_y, data.raw_z
+            data.raw_roll, data.raw_pitch, data.raw_yar, data.raw_x, data.raw_y, data.raw_z
         );
-        println!("[testbench_data] raw_roll: {}, filtered_roll: {}, raw_pitch: {}, filtered_pitch: {}, raw_yaw: {}, filtered_yaw: {}", data.raw_roll, filtered_roll, data.raw_pitch, filtered_pitch, data.raw_yar, filtered_yaw);
+        let (norm_roll, norm_pitch, norm_yaw): (T, T, T) = normalize_raw_rpy(data.raw_roll, data.raw_pitch, data.raw_yar);
+        println!("[testbench_data] raw_roll: {}, norm_roll: {}, filtered_roll: {} || raw_pitch: {}, norm_pitch: {}, filtered_pitch: {} || raw_yaw: {}, norm_yaw: {}, filtered_yaw: {}", data.raw_roll, norm_roll, filtered_roll, data.raw_pitch, norm_pitch, filtered_pitch, data.raw_yar, norm_yaw, filtered_yaw);
         writer.write_record(&[
             filtered_roll.to_f32().to_string(),
             filtered_pitch.to_f32().to_string(),
@@ -416,9 +421,9 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 fn main() {
     let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/yaw.csv"), Path::new("output/yaw.csv"));
-    let row_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
-    let pitch_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
-    let yaw_kf_config: Option<(f32, f32, f32)> = Some((1.0, 1.0, 1.0));
+    let row_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
+    let pitch_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
+    let yaw_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
     testbench_data(dataset_pth, output_pth, row_kf_config, pitch_kf_config, yaw_kf_config);
 }
 
