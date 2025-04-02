@@ -167,8 +167,10 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     let small_angle = small_angle_.unwrap_or(true);
     let (denom_roll, denom_pitch): (HighResolution, HighResolution) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
     println!("a_y: {}, a_y * a_y: {} || a_z: {}, a_z * a_z: {}", a_y, pow2!(a_y), a_z, pow2!(a_z));
-    let (num_roll, num_pitch): (HighResolution, HighResolution) = (a_y.to_high_resolution() / a_z.to_high_resolution(), a_x.to_high_resolution() / sqrt_approximation(denom_pitch, None));
-    //println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
+    let (num_roll, num_pitch): (HighResolution, HighResolution) = (
+        -a_y.to_high_resolution() / a_z.to_high_resolution().abs(), 
+        -a_x.to_high_resolution() / sqrt_approximation(denom_pitch, None)
+    );    //println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
     //println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
     //println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
     (
@@ -341,8 +343,9 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         }
     }
 
-    pub fn filter(&mut self, theta_: T, phi_: T, psi_: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T, Option<Debug<T>>) {
+    pub fn filter(&mut self, theta_: T, phi_: T, psi_: T, x_dd_: T, y_dd_: T, z_dd_: T) -> (T, T, T, Option<Debug<T>>) {
         let (theta, phi, psi): (T, T, T) = normalize_raw_rpy(theta_, phi_, psi_);
+        let (x_dd, y_dd, z_dd) = (x_dd_, y_dd_, z_dd_);
         let (theta_tilde, phi_tilde , psi_tilde, x_dd_tilde, y_dd_tilde, z_dd_tilde): (T, T, T, T, T, T) = (
             self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(psi),
             self.bwf_x_dd.filter(x_dd), self.bwf_y_dd.filter(y_dd), self.bwf_z_dd.filter(z_dd)
@@ -447,11 +450,14 @@ type FixedKfConfig = (Fixed, Fixed, Fixed);
 
 
 fn main() {
-    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/roll.csv"), Path::new("output/roll.csv"));
-    let kf_config_: FixedKfConfig = (Fixed::from_num(50.0), Fixed::from_num(1000.0), Fixed::from_num(0.005));
-    let row_kf_config: Option<FixedKfConfig> = Some(kf_config_.clone());
-    let pitch_kf_config: Option<FixedKfConfig> = Some(kf_config_.clone());
-    let yaw_kf_config: Option<FixedKfConfig> = Some(kf_config_);
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/random.csv"), Path::new("output/random.csv"));
+    let (kf_config_roll, kf_config_pitch): (FixedKfConfig, FixedKfConfig) = (
+        (Fixed::from_num(10.0), Fixed::from_num(5000.0), Fixed::from_num(0.005)),
+        (Fixed::from_num(10.0), Fixed::from_num(10000.0), Fixed::from_num(0.005)),
+    );
+    let row_kf_config: Option<FixedKfConfig> = Some(kf_config_roll.clone());
+    let pitch_kf_config: Option<FixedKfConfig> = Some(kf_config_pitch.clone());
+    let yaw_kf_config: Option<FixedKfConfig> = Some(kf_config_pitch.clone());
     testbench_data(dataset_pth, output_pth, row_kf_config, pitch_kf_config, yaw_kf_config);
 }
 
