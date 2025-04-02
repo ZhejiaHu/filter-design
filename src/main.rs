@@ -7,11 +7,15 @@ use std::{ error::Error, path::Path};
 use std::alloc::System;
 use std::fmt::Display;
 use std::fs::File;
-use fixed::types::{I16F16, I18F14};
+use fixed::types::{I16F16, I18F14, I64F64};
 use csv::{Reader, Writer};
+use csv::Trim::Headers;
+use fixed::{FixedI32, FixedI64};
+use fixed::types::extra::{U32, U8};
 use serde::{Deserialize, Serialize};
 
-type Fixed = I16F16;
+type Fixed = FixedI64<U32>;
+type HighResolution = I64F64;
 
 pub trait OneZero {
     fn one() -> Self;
@@ -22,6 +26,10 @@ pub trait OneZero {
 
     fn from_usize(num_u: usize) -> Self;
     fn from_f32(num_f: f32) -> Self;
+
+    fn to_high_resolution(self) -> HighResolution;
+
+    fn from_high_resolution(num_f: HighResolution) -> Self;
 }
 
 impl OneZero for f32 {
@@ -34,6 +42,10 @@ impl OneZero for f32 {
     fn from_usize(num_u: usize) -> Self { num_u as f32 }
 
     fn from_f32(num_f: f32) -> Self { num_f }
+
+    fn to_high_resolution(self) -> HighResolution { HighResolution::from_num(self) }
+
+    fn from_high_resolution(num_f: HighResolution) -> Self { num_f.to_num::<f32>()}
 }
 
 impl OneZero for Fixed {
@@ -46,21 +58,25 @@ impl OneZero for Fixed {
 
     fn from_usize(num_u: usize) -> Self { Fixed::from_num(num_u) }
     fn from_f32(num_f: f32) -> Self { Fixed::from_num(num_f) }
+
+    fn to_high_resolution(self) -> HighResolution { HighResolution::from_num(self) }
+
+    fn from_high_resolution(num_f: HighResolution) -> Self { num_f.to_num::<Fixed>() }
 }
 
 
-fn fast_power<T>(base: T, exp: usize, cache: &mut [T]) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+
+fn fast_power(base: HighResolution, exp: usize, cache: &mut [HighResolution]) -> HighResolution {
     assert!(exp < cache.len());
     if exp == 0 {
-        cache[exp] = T::one();
-        return T::one();
+        cache[exp] = HighResolution::from_num(1.0);
+        return cache[exp];
     }
     if exp == 1 {
         cache[exp] = base;
         return base;
     }
-    if cache[exp] == T::zero() {
+    if cache[exp] == HighResolution::from_num(0.0) {
         cache[exp] = if exp & 1 == 1 {
             base * fast_power(base, exp - 1, cache)
         } else {
@@ -71,42 +87,40 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     cache[exp]
 }
 
-pub fn arctan_approximation<T>(num: T, degree_: Option<usize>, small_angle: bool) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
-    if small_angle || num == T::zero() {
+pub fn arctan_approximation(num: HighResolution, degree_: Option<usize>, small_angle: bool) -> HighResolution {
+    if small_angle || num == HighResolution::from_num(0.0) {
         return num;
     }
-    if num.abs() > T::one() {
-        return if num > T::one() {
-            T::from_f32(core::f32::consts::PI / 2.0) + - arctan_approximation(T::one() / num, degree_, small_angle)
+    if num.abs() > HighResolution::from_num(1.0) {
+        return if num > HighResolution::from_num(1.0) {
+            HighResolution::from_num(core::f32::consts::PI / 2.0) + - arctan_approximation(HighResolution::from_num(1.0) / num, degree_, small_angle)
         } else {
-            -T::from_f32(core::f32::consts::PI / 2.0) + - arctan_approximation(T::one() / num, degree_, small_angle)
+            -HighResolution::from_num(core::f32::consts::PI / 2.0) + - arctan_approximation(HighResolution::from_num(1.0) / num, degree_, small_angle)
         }
     }
     const MAX_DEGREE: usize = 10;
     let degree = degree_.unwrap_or(MAX_DEGREE);
     assert!(degree <= MAX_DEGREE);
-    let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
+    let mut eval: [HighResolution; MAX_DEGREE + 1] = [HighResolution::from_num(0); MAX_DEGREE + 1];
     for idx in (0..=degree).rev() {
         if idx % 2 == 1 {
             fast_power(num, idx, &mut eval);
         }
     }
-    let mut arctan: T = T::zero();
+    let mut arctan: HighResolution = HighResolution::from_num(0.0);
     for idx in (1..=degree).step_by(2) {
-        let co_eff: T = if (idx / 2) % 2 == 1 { -T::one() } else { T::one() };
-        arctan += co_eff * eval[idx] / T::from_usize(idx);
+        let co_eff: HighResolution = if (idx / 2) % 2 == 1 { -HighResolution::from_num(1.0) } else { HighResolution::from_num(1.0) };
+        arctan += co_eff * eval[idx] / HighResolution::from_num(idx);
     }
     arctan
 }
 
 
-pub fn arcsin_approximation<T>(num: T, degree_: Option<usize>) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
+pub fn arcsin_approximation(num: HighResolution, degree_: Option<usize>) -> HighResolution {
     const MAX_DEGREE: usize = 10;
     let degree = degree_.unwrap_or(MAX_DEGREE);
     assert!(degree <= MAX_DEGREE && degree % 2 == 1);
-    let mut eval: [T; MAX_DEGREE + 1] = [T::zero(); MAX_DEGREE + 1];
+    let mut eval: [HighResolution; MAX_DEGREE + 1] = [HighResolution::from_num(0.0); MAX_DEGREE + 1];
     for idx in (0..=degree).rev() {
         if idx % 2 == 1 {
             fast_power(num, idx, &mut eval);
@@ -114,12 +128,12 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
     }
     const FACT_LEN: usize = (MAX_DEGREE >> 1) + 1;
     let mut factorials: [[usize; 2]; FACT_LEN] = [[1; 2]; FACT_LEN];
-    let mut sol: T = num;
+    let mut sol: HighResolution = num;
     for idx in 1..=FACT_LEN.min(degree >> 1) {
         let cur_power: usize = (idx << 1) + 1;
         factorials[idx][0] = factorials[idx - 1][0] * ((idx << 1) - 1);
         factorials[idx][1] = factorials[idx - 1][1] * (idx << 1);
-        sol += (T::from_usize(factorials[idx][0]) * eval[cur_power]) / (T::from_usize(factorials[idx][1]) * T::from_usize(cur_power))
+        sol += (HighResolution::from_num(factorials[idx][0]) * eval[cur_power]) / (HighResolution::from_num(factorials[idx][1]) * HighResolution::from_num(cur_power))
     }
     sol
 }
@@ -127,15 +141,14 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 
-fn sqrt_approximation<T>(num: T, err_: Option<T>) -> T
-where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
-    assert!(num > T::zero());
-    let err: T = err_.unwrap_or(T::from_f32(1e-3));
-    let mut sol: T = num / (T::one() + T::one());
-    let mut prv_sol: Option<T> = None;
+fn sqrt_approximation(num: HighResolution, err_: Option<HighResolution>) -> HighResolution {
+    assert!(num > HighResolution::from_num(0));
+    let err: HighResolution = err_.unwrap_or(HighResolution::from_num(1e-3));
+    let mut sol: HighResolution = num / (HighResolution::from_num(2));
+    let mut prv_sol: Option<HighResolution> = None;
     while (sol * sol + - num).abs() > err  {
         //println!("sol: {}, num: {}, sol * sol + - num: {}", sol, num, sol * sol + - num);
-        sol = T::from_f32(0.5)  * (sol + num / sol);
+        sol = HighResolution::from_num(0.5)  * (sol + num / sol);
         if prv_sol.is_some() && (prv_sol.unwrap() + - sol).abs() < err {
             break;
         }
@@ -146,18 +159,22 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 
 
 macro_rules! pow2 {
-    ($x: expr) => { (($x) * ($x)) };
+    ($x: expr) => { (($x.to_high_resolution()) * ($x.to_high_resolution())) };
 }
 
 pub fn row_pitch<T>(a_x: T, a_y: T, a_z: T, degree: Option<usize>, small_angle_: Option<bool>) -> (T, T)
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     let small_angle = small_angle_.unwrap_or(true);
-    let (denom_roll, denom_pitch): (T, T) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
-    let (num_roll, num_pitch): (T, T) = (a_y / sqrt_approximation(denom_roll, None), a_x / sqrt_approximation(denom_pitch, None));
+    let (denom_roll, denom_pitch): (HighResolution, HighResolution) = (pow2!(a_x) + pow2!(a_z), pow2!(a_y) + pow2!(a_z));
+    println!("a_y: {}, a_y * a_y: {} || a_z: {}, a_z * a_z: {}", a_y, pow2!(a_y), a_z, pow2!(a_z));
+    let (num_roll, num_pitch): (HighResolution, HighResolution) = (a_y.to_high_resolution() / a_z.to_high_resolution(), a_x.to_high_resolution() / sqrt_approximation(denom_pitch, None));
     //println!("a_x: {}, a_x * a_x: {} | a_y: {}, a_y * a_y: {} | a_z : {}, a_z * a_z: {}", a_x, pow2!(a_x), a_y, pow2!(a_y), a_z, pow2!(a_z));
     //println!("[num_roll] num_roll: {}, arctan(num_roll): {}", num_roll, arctan_approximation(num_roll, degree, small_angle));
     //println!("[num_pitch] num_pitch: {}, arctan(num_pitch): {}", num_pitch, arctan_approximation(num_pitch, degree, small_angle));
-    (arctan_approximation(num_roll, degree, small_angle), arctan_approximation(num_pitch, degree, small_angle))
+    (
+        T::from_high_resolution(arctan_approximation(num_roll, degree, small_angle)),
+        T::from_high_resolution(arctan_approximation(num_pitch, degree, small_angle))
+    )
 }
 
 
@@ -237,18 +254,19 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         OffsetsTyped { yaw: T::zero(), pitch: T::zero(), roll: T::zero(), }
     }
 
-    pub(crate) fn from_quaternion(&mut self, w: T, x: T, y: T, z: T) {
-        let two = T::one() + T::one();
-        let one = T::one();
+    pub(crate) fn from_quaternion(&mut self, w_: T, x_: T, y_: T, z_: T) {
+        let (w, x, y, z): (HighResolution, HighResolution, HighResolution, HighResolution) = (w_.to_high_resolution(), x_.to_high_resolution(), y_.to_high_resolution(), z_.to_high_resolution());
+        let two = (T::one() + T::one()).to_high_resolution();
+        let one = (T::one()).to_high_resolution();
         let gx = two * (x * z + (- w * y));
         let gy = two * (w * x + y * z);
         let gz = w * w + (- x * x) + (- y * y) + z * z;
         let yaw = arctan2!((two * x * y + (- two * w * z)), two * w * w + two * x * x + (- one));
         let pitch = arcsin_highest_approximation!(two * (w * y + (- z * x)));
         let roll = arctan2!(two * (w * x + y * z), one + (- two * (x * x + y * y)));
-        self.yaw = yaw;
-        self.pitch = pitch;
-        self.roll = roll;
+        self.yaw = T::from_high_resolution(yaw);
+        self.pitch = T::from_high_resolution(pitch);
+        self.roll = T::from_high_resolution(roll);
     }
 }
 #[derive(Copy, Clone)]
@@ -302,6 +320,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 
+type Debug<T> = (T, T, T, T, T);
 
 impl<T> FilterSystem<T>
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
@@ -322,7 +341,7 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         }
     }
 
-    pub fn filter(&mut self, theta_: T, phi_: T, psi_: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T) {
+    pub fn filter(&mut self, theta_: T, phi_: T, psi_: T, x_dd: T, y_dd: T, z_dd: T) -> (T, T, T, Option<Debug<T>>) {
         let (theta, phi, psi): (T, T, T) = normalize_raw_rpy(theta_, phi_, psi_);
         let (theta_tilde, phi_tilde , psi_tilde, x_dd_tilde, y_dd_tilde, z_dd_tilde): (T, T, T, T, T, T) = (
             self.bwf_theta.filter(theta), self.bwf_phi.filter(phi), self.bwf_psi.filter(psi),
@@ -338,7 +357,8 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
         (
             self.kf_theta.predict(theta_tilde, theta_hat).1,
             self.kf_phi.predict(phi_tilde, phi_hat).1,
-            psi_tilde
+            psi_tilde,
+            Some((theta_tilde, phi_tilde, psi_tilde, theta_hat, phi_hat))
         )
     }
 
@@ -395,35 +415,43 @@ where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output 
 }
 
 
+macro_rules! stringify {
+    ($num: ident) => { $num.to_f32().to_string() };
+}
+
 
 fn testbench_data<T>(dataset: &Path, output_path: &Path, row_kf_config: Option<(T, T, T)>, pitch_kf_config: Option<(T, T, T)>, yaw_kf_config: Option<(T, T, T)>)
 where T: Add<Output = T> + AddAssign + Mul<Output = T> + MulAssign + Div<Output = T> + DivAssign + Neg<Output = T> + Copy + PartialEq + PartialOrd + OneZero + Display {
     let dataset: Vec<Data<T>> = process_data(dataset).unwrap();
     let mut writer = Writer::from_path(output_path).unwrap();
-    writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw"]).expect("No error writing header");
+    writer.write_record(&["Filtered Roll", "Filtered Pitch", "Filtered Yaw", "Butterworth Roll", "Butterworth Pitch", "Butterworth Yaw", "Estimated Roll", "Estimated Pitch"]).expect("No error writing header");
     let mut filter_system: FilterSystem<T> = FilterSystem::new(Some([10u8; 6]), row_kf_config, pitch_kf_config, yaw_kf_config);
     for data in dataset {
         println!("================================================================================================================");
-        let (filtered_roll, filtered_pitch, filtered_yaw): (T, T, T) = filter_system.filter(
+        let (filtered_roll, filtered_pitch, filtered_yaw, debug_): (T, T, T, Option<Debug<T>>) = filter_system.filter(
             data.raw_roll, data.raw_pitch, data.raw_yar, data.raw_x, data.raw_y, data.raw_z
         );
         let (norm_roll, norm_pitch, norm_yaw): (T, T, T) = normalize_raw_rpy(data.raw_roll, data.raw_pitch, data.raw_yar);
         println!("[testbench_data] raw_roll: {}, norm_roll: {}, filtered_roll: {} || raw_pitch: {}, norm_pitch: {}, filtered_pitch: {} || raw_yaw: {}, norm_yaw: {}, filtered_yaw: {}", data.raw_roll, norm_roll, filtered_roll, data.raw_pitch, norm_pitch, filtered_pitch, data.raw_yar, norm_yaw, filtered_yaw);
+        let (bw_roll, bw_pitch, bw_yaw, estimate_roll, estimate_pitch) = debug_.unwrap_or((T::from_f32(0.0), T::from_f32(0.0), T::from_f32(0.0), T::from_f32(0.0), T::from_f32(0.0)));
         writer.write_record(&[
-            filtered_roll.to_f32().to_string(),
-            filtered_pitch.to_f32().to_string(),
-            filtered_yaw.to_f32().to_string()]
-        ).expect("No error writing line");
+            stringify!(filtered_roll), stringify!(filtered_pitch), stringify!(filtered_yaw),
+            stringify!(bw_roll), stringify!(bw_pitch),stringify!(bw_yaw),
+            stringify!(estimate_roll), stringify!(estimate_pitch)
+        ]).expect("No error writing line");
     }
 }
 
 
+type FixedKfConfig = (Fixed, Fixed, Fixed);
+
 
 fn main() {
-    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/yaw.csv"), Path::new("output/yaw.csv"));
-    let row_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
-    let pitch_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
-    let yaw_kf_config: Option<(f32, f32, f32)> = Some((50.0, 500.0, 0.01));
+    let (dataset_pth, output_pth): (&Path, &Path) = (Path::new("data/roll.csv"), Path::new("output/roll.csv"));
+    let kf_config_: FixedKfConfig = (Fixed::from_num(50.0), Fixed::from_num(1000.0), Fixed::from_num(0.005));
+    let row_kf_config: Option<FixedKfConfig> = Some(kf_config_.clone());
+    let pitch_kf_config: Option<FixedKfConfig> = Some(kf_config_.clone());
+    let yaw_kf_config: Option<FixedKfConfig> = Some(kf_config_);
     testbench_data(dataset_pth, output_pth, row_kf_config, pitch_kf_config, yaw_kf_config);
 }
 
@@ -431,7 +459,7 @@ fn main() {
 #[cfg(test)]
 mod test {
     use rand::Rng;
-    use crate::{arcsin_approximation, arctan_approximation, sqrt_approximation};
+    use crate::{arcsin_approximation, arctan_approximation, sqrt_approximation, HighResolution};
     const ITER: usize = 100;
     const ERR: f32 = 2e-1;
 
@@ -443,12 +471,15 @@ mod test {
     fn test_arcsin() {
         let mut rng = rand::rng();
         let num: f32 = rng.random_range(-1.0 + ERR..1.0);
-        assert_close!(num.abs().sqrt(), sqrt_approximation(num.abs(), None));
-        // for idx in 0..ITER {
-        //     let num: f32 = rng.random_range(-1.0 + ERR..1.0);
-        //     assert_close!(num.asin(), arcsin_highest_approximation!(num));
-        //     assert_close!(num.atan(), arctan_highest_approximation!(num));
-        //     println!("num: {}, sqrt_sol: {}, sqrt_ans: {}", num.abs(), num.abs().sqrt(), sqrt_approximation(num.abs(), None));
-        // }
+        for idx in 0..ITER {
+            let num: f32 = rng.random_range(-1.0 + ERR..1.0);
+            let arcsin = arcsin_highest_approximation!(HighResolution::from_num(num)).to_num::<f32>();
+            let arctan = arctan_highest_approximation!(HighResolution::from_num(num)).to_num::<f32>();
+            let sqrt = sqrt_approximation(HighResolution::from_num(num.abs()), None).to_num::<f32>();
+            println!("idx: {}, num: {}, arcsin: {} (original: {}), arctan: {} (original: {}), sqrt: {} (original: {})", idx, num, arcsin, num.asin(), arctan, num.atan(), sqrt, num.abs().sqrt());
+            assert_close!(num.asin(), arcsin);
+            assert_close!(num.atan(), arctan);
+            assert_close!(num.abs().sqrt(), sqrt);
+        }
     }
 }
